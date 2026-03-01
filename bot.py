@@ -1,68 +1,72 @@
 import requests
-import openai
+import json
+import logging
 import schedule
 import time
+import random
+from datetime import datetime
 
-# DALL-E API settings
-DALLE_API_URL = 'https://api.openai.com/v1/images/generations'
-DALLE_API_KEY = 'your_dalle_api_key'
+# Configure logging
+logging.basicConfig(filename='workspace_bot.log', level=logging.INFO)
 
-# GPT-4 API settings
-GPT4_API_URL = 'https://api.openai.com/v1/chat/completions'
-GPT4_API_KEY = 'your_gpt4_api_key'
+class InstagramBot:
+    def __init__(self, access_token):
+        self.access_token = access_token
+        self.imgur_client_id = 'YOUR_IMGUR_CLIENT_ID'
+        self.themed_workspaces = [
+            'Nature', 'Technology', 'Art', 'Fashion', 'Food',
+            'Travel', 'Music', 'Fitness', 'DIY', 'Education'
+        ]
+        self.hashtag_sets = [
+            ['#art', '#creativity', '#inspiration'],
+            ['#nature', '#photography', '#landscape'],
+            ['#fashion', '#style', '#trending'],
+            ['#food', '#delicious', '#foodie'],
+            ['#travel', '#adventure', '#explore']
+        ]
 
-# Instagram API settings
-INSTAGRAM_API_URL = 'https://graph.instagram.com/me/media'
-INSTAGRAM_ACCESS_TOKEN = 'your_instagram_access_token'
+    def generate_image(self, prompt):
+        try:
+            response = requests.post('https://api.openai.com/v1/images/generations',
+                                     headers={'Authorization': f'Bearer {self.access_token}'},
+                                     json={'prompt': prompt})
+            return response.json()['data'][0]['url']
+        except Exception as e:
+            logging.error(f'Error generating image: {e}')
 
-# Function to generate an image using DALL-E
-def generate_image(prompt):
-    response = requests.post(DALLE_API_URL, headers={
-        'Authorization': f'Bearer {DALLE_API_KEY}',
-        'Content-Type': 'application/json'
-    }, json={
-        'prompt': prompt,
-        'n': 1,
-        'size': '1024x1024'
-    })
-    image_url = response.json()['data'][0]['url']
-    return image_url
+    def post_to_instagram(self, image_url, caption):
+        payload = {'image_url': image_url, 'caption': caption}
+        response = requests.post('https://graph.instagram.com/me/media',
+                                 headers={'Authorization': f'Bearer {self.access_token}'},
+                                 json=payload)
+        return response.json()
 
-# Function to generate a caption using GPT-4
-def generate_caption(image_url):
-    response = requests.post(GPT4_API_URL, headers={
-        'Authorization': f'Bearer {GPT4_API_KEY}',
-        'Content-Type': 'application/json'
-    }, json={
-        'model': 'gpt-4',
-        'messages': [{
-            'role': 'user',
-            'content': f'Create a captivating caption for an image: {image_url}'
-        }]
-    })
-    caption = response.json()['choices'][0]['message']['content']
-    return caption
+    def upload_to_imgur(self, image_path):
+        headers = {'Authorization': f'Client-ID {self.imgur_client_id}' }
+        with open(image_path, 'rb') as img:  
+            response = requests.post('https://api.imgur.com/3/image', headers=headers, data=img)
+            return response.json()['data']['link']
 
-# Function to post an image to Instagram
-def post_to_instagram(image_url, caption):
-    requests.post(INSTAGRAM_API_URL, headers={
-        'Authorization': f'Bearer {INSTAGRAM_ACCESS_TOKEN}'
-    }, data={
-        'image_url': image_url,
-        'caption': caption
-    })
+    def caption_generation(self, theme):
+        return f'This is a {theme} themed post.'
 
-# Scheduler to post 10 images daily at specific times
-def schedule_daily_posts():
-    for i in range(10):
-        prompt = f'Artistic image {i + 1}'
-        image_url = generate_image(prompt)
-        caption = generate_caption(image_url)
-        post_to_instagram(image_url, caption)
+    def run_daily(self):
+        for theme in self.themed_workspaces:
+            image_url = self.generate_image(theme)
+            caption = self.caption_generation(theme)
+            self.post_to_instagram(image_url, caption)
 
-# Schedule posting at 8 AM
-schedule.every().day.at('08:00').do(schedule_daily_posts)
+    def scheduler(self):
+        schedule.every().day.at("09:00").do(self.run_daily)
+        while True:
+            schedule.run_pending()
+            time.sleep(60)  
 
-while True:
-    schedule.run_pending()
-    time.sleep(1)
+if __name__ == '__main__':
+    bot = InstagramBot('YOUR_INSTAGRAM_ACCESS_TOKEN')
+    mode = input('Enter mode (test/immediate): ')
+    if mode == 'test':
+        print('Running in test mode. No posts will be made.')
+        # Implement test mode logic here
+    else:
+        bot.scheduler()
