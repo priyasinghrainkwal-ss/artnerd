@@ -1,0 +1,5 @@
+openai
+requests
+schedule
+pillow
+python-dotenv
