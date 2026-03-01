@@ -1,0 +1,361 @@
+"""
+Instagram AI Art Workspace Bot
+================================
+Auto-generates AI images via DALL-E, creates captions + hashtags,
+and posts 10 images daily to Instagram using Meta Graph API.
+
+Requirements:
+    pip install openai requests schedule pillow python-dotenv
+
+Setup:
+    1. Copy .env.example to .env and fill in your credentials
+    2. Run: python bot.py
+"""
+
+import os
+import time
+import json
+import random
+import schedule
+import requests
+from datetime import datetime
+from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ─────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+INSTAGRAM_ACCOUNT_ID = os.getenv("INSTAGRAM_ACCOUNT_ID")
+ACCESS_TOKEN         = os.getenv("META_ACCESS_TOKEN")
+IMAGE_HOST_URL       = os.getenv("IMAGE_HOST_URL")   # Public URL base where images are hosted
+SAVE_DIR             = "generated_images"
+LOG_FILE             = "post_log.json"
+
+os.makedirs(SAVE_DIR, exist_ok=True)
+
+# ─────────────────────────────────────────────
+# THEMES & PROMPTS
+# ─────────────────────────────────────────────
+THEMES = [
+    {
+        "name": "Futuristic Neon Workspace",
+        "prompt": "A stunning futuristic digital art workspace glowing with neon blue and purple lights, holographic screens floating in the air, sleek minimalist desk, cyberpunk aesthetic, ultra-detailed 4K digital illustration",
+        "caption_hook": "🌌 Step into the future of creativity."
+    },
+    {
+        "name": "Cozy Lo-Fi Art Studio",
+        "prompt": "A cozy lo-fi digital art studio at golden hour, warm fairy lights, vintage desk with a glowing tablet, bookshelves, plants, soft pastel tones, peaceful and aesthetic, digital illustration style",
+        "caption_hook": "🍵 Where art meets comfort."
+    },
+    {
+        "name": "Cyberpunk Creative Hub",
+        "prompt": "A cyberpunk AI creative hub with neon signs, rain-streaked windows, multiple holographic monitors displaying art, dark moody atmosphere, red and cyan color palette, hyper-realistic digital painting",
+        "caption_hook": "⚡ Hack the creative matrix."
+    },
+    {
+        "name": "Minimalist White Desk",
+        "prompt": "A clean minimalist all-white digital art workspace, single monitor with glowing art on screen, marble desk, soft natural light, scandinavian interior design, ultra-clean aesthetic illustration",
+        "caption_hook": "🤍 Less clutter. More creativity."
+    },
+    {
+        "name": "Holographic 3D Studio",
+        "prompt": "A 3D holographic digital art studio floating in space, transparent glowing panels, abstract digital sculptures, artist avatar working, deep blue and gold colors, cinematic render",
+        "caption_hook": "✨ Art without boundaries."
+    },
+    {
+        "name": "Fantasy Artist Realm",
+        "prompt": "A magical fantasy artist realm with glowing spell books, enchanted crystal displays showing digital art, mystical forest background, fireflies, purple and emerald tones, painterly digital art style",
+        "caption_hook": "🧙 Where magic meets creativity."
+    },
+    {
+        "name": "Night Owl Programmer Studio",
+        "prompt": "A late-night programmer and digital artist hybrid studio, dark room lit by multiple monitors, energy drink cans, code and art on screens, moody blue ambient light, photorealistic digital illustration",
+        "caption_hook": "🌙 The best work happens after midnight."
+    },
+    {
+        "name": "Retro Synthwave Studio",
+        "prompt": "A retro 80s synthwave digital art studio with neon grid floors, chrome desk, vintage monitors showing synthwave art, palm trees silhouette outside, pink and orange sunset palette, retrowave aesthetic",
+        "caption_hook": "🎸 Riding the retrowave of creativity."
+    },
+    {
+        "name": "Sci-Fi Space Workstation",
+        "prompt": "A sci-fi artist workstation aboard a futuristic space station, panoramic view of nebula outside the window, floating zero-gravity tools, glowing blue interfaces, astronaut artist at work, stunning digital concept art",
+        "caption_hook": "🚀 Creating art among the stars."
+    },
+    {
+        "name": "Pastel Aesthetic Corner",
+        "prompt": "A soft pastel aesthetic digital art corner, lavender and mint tones, kawaii desk accessories, glowing tablet with cute digital art, flowers, macaron colors, warm cozy lighting, anime-inspired illustration style",
+        "caption_hook": "🌸 Sweet vibes, sweeter art."
+    },
+]
+
+# ─────────────────────────────────────────────
+# HASHTAG SETS (rotate daily)
+# ─────────────────────────────────────────────
+HASHTAG_SETS = [
+    "#AIArt #DigitalArt #AIGenerated #GenerativeArt #MidjourneyArt #AIArtwork #DigitalArtist #AIAnimation #FuturisticArt #WorkspaceGoals #DeskSetup #CreativeWorkspace #ArtStudio #ArtDesk #WorkspaceDesign #ArtisticVibes #CreativeSpace #StudioVibes #DeskGoals #ArtInspiration #DigitalCreative #TechArt #ArtCommunity #CreatorSpace #InstaArt #ArtDaily #AICreative #ConceptArt #artofinstagram #digitalartist",
+    "#AestheticWorkspace #DreamDesk #ProductivitySetup #NeonAesthetic #CyberpunkArt #LoFiVibes #ArtisticSetup #CreativeLife #DesignerLife #StudioAesthetic #HomestudioSetup #WorkFromHome #TechSetup #GamerAesthetic #FuturisticDesign #SciFiArt #NeonLights #SynthwaveArt #RetroFuturism #ArtMotivation #CreativeMotivation #ArtVibes #VisualArt #DigitalDesign #ArtOfTheDay #DailyArt #InspirationArt #ArtGallery #ArtLovers #aiartist",
+    "#ExploreArt #ArtExplore #CreativeCommunity #ArtisticExpression #AITools #StableDiffusion #AIImageGeneration #AIArtCommunity #DigitalArtwork #PixelPerfect #AbstractArt #ModernArt #TechAesthetic #NFTArt #CryptoArt #FutureTech #TechVibes #InnovationArt #CreatorEconomy #ContentCreator #InstagramArt #VisualDesign #GraphicArt #workspaceinspo #desksetup #aiartist #digitalartist #AIGenerated #ArtificialIntelligence #PixelArt",
+]
+
+# ─────────────────────────────────────────────
+# STEP 1: GENERATE IMAGE WITH DALL-E
+# ─────────────────────────────────────────────
+def generate_image(theme: dict, index: int) -> str:
+    """Generate an AI image using DALL-E 3 and save locally."""
+    print(f"  🎨 Generating image {index+1}/10: {theme['name']}")
+
+    response = client.images.generate(
+        model="dall-e-3",
+        prompt=theme["prompt"],
+        size="1024x1024",
+        quality="hd",
+        n=1,
+    )
+
+    image_url = response.data[0].url
+    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename   = f"{SAVE_DIR}/post_{index+1}_{timestamp}.png"
+
+    # Download image
+    img_data = requests.get(image_url).content
+    with open(filename, "wb") as f:
+        f.write(img_data)
+
+    print(f"     ✅ Saved: {filename}")
+    return filename
+
+# ─────────────────────────────────────────────
+# STEP 2: GENERATE CAPTION
+# ─────────────────────────────────────────────
+def generate_caption(theme: dict, hashtag_set: str) -> str:
+    """Generate an engaging caption using GPT."""
+    print(f"  ✍️  Generating caption for: {theme['name']}")
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a creative Instagram content writer for an AI digital art workspace account. "
+                    "Write short, engaging, punchy captions (max 3 lines). "
+                    "Use 1-2 relevant emojis. No hashtags (added separately). Keep it inspiring and aesthetic."
+                )
+            },
+            {
+                "role": "user",
+                "content": f"Write an Instagram caption for this AI art workspace theme: '{theme['name']}'. Hook: {theme['caption_hook']}"
+            }
+        ],
+        max_tokens=120,
+    )
+
+    caption_text = response.choices[0].message.content.strip()
+    full_caption  = f"{caption_text}\n\n🎨 Created with AI ✨\n\n{hashtag_set}"
+    return full_caption
+
+# ─────────────────────────────────────────────
+# STEP 3: UPLOAD IMAGE TO INSTAGRAM
+# ─────────────────────────────────────────────
+def upload_to_instagram(image_path: str, caption: str) -> bool:
+    """
+    Post image to Instagram via Meta Graph API.
+    
+    NOTE: Instagram Graph API requires a PUBLIC image URL.
+    Options to host images publicly:
+      - Imgur API (free)
+      - AWS S3 public bucket
+      - Cloudinary (free tier)
+      - Your own server
+    
+    Set IMAGE_HOST_URL in .env OR use the imgur_upload() helper below.
+    """
+    # Upload image to Imgur first to get a public URL
+    public_url = imgur_upload(image_path)
+    if not public_url:
+        print("     ❌ Failed to get public image URL. Skipping post.")
+        return False
+
+    # Step A: Create media container
+    create_url = f"https://graph.facebook.com/v19.0/{INSTAGRAM_ACCOUNT_ID}/media"
+    create_payload = {
+        "image_url": public_url,
+        "caption":   caption,
+        "access_token": ACCESS_TOKEN,
+    }
+
+    r = requests.post(create_url, data=create_payload)
+    result = r.json()
+
+    if "id" not in result:
+        print(f"     ❌ Container creation failed: {result}")
+        return False
+
+    container_id = result["id"]
+    print(f"     📦 Container created: {container_id}")
+
+    # Wait for processing
+    time.sleep(5)
+
+    # Step B: Publish the container
+    publish_url = f"https://graph.facebook.com/v19.0/{INSTAGRAM_ACCOUNT_ID}/media_publish"
+    publish_payload = {
+        "creation_id":  container_id,
+        "access_token": ACCESS_TOKEN,
+    }
+
+    r2 = requests.post(publish_url, data=publish_payload)
+    result2 = r2.json()
+
+    if "id" in result2:
+        print(f"     ✅ Posted! Media ID: {result2['id']}")
+        return result2["id"]
+    else:
+        print(f"     ❌ Publish failed: {result2}")
+        return False
+
+# ─────────────────────────────────────────────
+# IMGUR UPLOAD (free public image hosting)
+# ─────────────────────────────────────────────
+def imgur_upload(image_path: str) -> str:
+    """Upload image to Imgur and return public URL."""
+    imgur_client_id = os.getenv("IMGUR_CLIENT_ID")
+    if not imgur_client_id:
+        print("     ⚠️  IMGUR_CLIENT_ID not set. Set it in .env for image hosting.")
+        return None
+
+    headers = {"Authorization": f"Client-ID {imgur_client_id}"}
+    with open(image_path, "rb") as f:
+        response = requests.post(
+            "https://api.imgur.com/3/image",
+            headers=headers,
+            files={"image": f}
+        )
+
+    data = response.json()
+    if data.get("success"):
+        url = data["data"]["link"]
+        print(f"     🌐 Imgur URL: {url}")
+        return url
+    else:
+        print(f"     ❌ Imgur upload failed: {data}")
+        return None
+
+# ─────────────────────────────────────────────
+# STEP 4: LOG POST
+# ─────────────────────────────────────────────
+def log_post(theme_name: str, image_path: str, caption: str, media_id):
+    log = []
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "r") as f:
+            log = json.load(f)
+
+    log.append({
+        "timestamp":  datetime.now().isoformat(),
+        "theme":      theme_name,
+        "image_path": image_path,
+        "caption":    caption[:100] + "...",
+        "media_id":   str(media_id) if media_id else "failed",
+        "status":     "posted" if media_id else "failed"
+    })
+
+    with open(LOG_FILE, "w") as f:
+        json.dump(log, f, indent=2)
+
+# ─────────────────────────────────────────────
+# MAIN DAILY JOB
+# ─────────────────────────────────────────────
+def run_daily_posts():
+    """Main function: generates and posts 10 images throughout the day."""
+    print(f"\n{'='*55}")
+    print(f"🚀 Starting Daily Instagram Run — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    print(f"{'='*55}")
+
+    # Pick hashtag set for today (rotate daily)
+    day_of_year   = datetime.now().timetuple().tm_yday
+    hashtag_set   = HASHTAG_SETS[day_of_year % len(HASHTAG_SETS)]
+
+    # Shuffle themes so posts vary each day
+    themes_today  = THEMES.copy()
+    random.shuffle(themes_today)
+
+    # Posting times spread across the day (10 posts)
+    post_times = [
+        "08:00", "09:30", "11:00", "13:00", "15:00",
+        "17:00", "18:30", "20:00", "21:30", "23:00"
+    ]
+
+    print(f"\n📅 Scheduled post times: {', '.join(post_times)}\n")
+
+    for i, theme in enumerate(themes_today):
+        print(f"\n─── Post {i+1}/10 ─── [{post_times[i]}] ───────────────")
+
+        try:
+            # 1. Generate image
+            image_path = generate_image(theme, i)
+
+            # 2. Generate caption
+            caption = generate_caption(theme, hashtag_set)
+
+            # 3. Post to Instagram
+            media_id = upload_to_instagram(image_path, caption)
+
+            # 4. Log result
+            log_post(theme["name"], image_path, caption, media_id)
+
+            # Wait before next post (avoid rate limits)
+            if i < 9:
+                wait_seconds = 90 * 60  # 90 minutes between posts
+                print(f"\n⏳ Waiting {wait_seconds//60} minutes before next post...\n")
+                time.sleep(wait_seconds)
+
+        except Exception as e:
+            print(f"     ❌ Error on post {i+1}: {e}")
+            log_post(theme["name"], "", "", None)
+            continue
+
+    print(f"\n{'='*55}")
+    print("✅ All 10 posts completed for today!")
+    print(f"{'='*55}\n")
+
+# ─────────────────────────────────────────────
+# TEST MODE (generates 1 image, no posting)
+# ─────────────────────────────────────────────
+def test_mode():
+    """Test image generation and caption without posting to Instagram."""
+    print("\n🧪 TEST MODE — Generating 1 image (no Instagram posting)\n")
+    theme = THEMES[0]
+    hashtag_set = HASHTAG_SETS[0]
+
+    image_path = generate_image(theme, 0)
+    caption    = generate_caption(theme, hashtag_set)
+
+    print(f"\n📝 Caption Preview:\n{'-'*40}\n{caption}\n{'-'*40}")
+    print(f"\n✅ Test complete! Image saved to: {image_path}")
+
+# ─────────────────────────────────────────────
+# SCHEDULER
+# ─────────────────────────────────────────────
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        # Run: python bot.py test
+        test_mode()
+    elif len(sys.argv) > 1 and sys.argv[1] == "now":
+        # Run: python bot.py now  (run immediately)
+        run_daily_posts()
+    else:
+        # Run on schedule every day at 8:00 AM
+        print("📅 Scheduler started — bot will run daily at 08:00 AM")
+        print("💡 Tip: Run 'python bot.py test' to test image generation")
+        print("💡 Tip: Run 'python bot.py now'  to post immediately\n")
+        schedule.every().day.at("08:00").do(run_daily_posts)
+        while True:
+            schedule.run_pending()
+            time.sleep(60)
